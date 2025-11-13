@@ -17,7 +17,7 @@ def check_license(license_key):
     today = datetime.date.today()
     for row in data["results"]:
         if row["license_key"] == license_key:
-            activo = row["activo"]
+            activo = str(row["activo"]).lower() == "true"  # <---- Solución para booleano
             expira = row["fecha_expira"]
             dias_restantes = (datetime.date.fromisoformat(expira) - today).days
             if activo and dias_restantes > 0:
@@ -34,3 +34,4 @@ def validar():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
