@@ -17,16 +17,13 @@ def check_license(license_key):
     today = datetime.date.today()
     for row in data["results"]:
         if row["license_key"] == license_key:
-            activo = str(row["activo"]).lower() == "true"
             expira = row["fecha_expira"]
             dias_restantes = (datetime.date.fromisoformat(expira) - today).days
-            # SOLO válida si está activa Y no expiró (fecha >= hoy)
-            if activo and dias_restantes >= 0:
+            if dias_restantes >= 0:
                 return {"valida": True, "expira": expira, "dias": dias_restantes, "usuario": row.get("usuario","")}
             else:
                 return {"valida": False, "expira": expira, "dias": dias_restantes, "usuario": row.get("usuario","")}
     return {"valida": False}
-
 
 @app.route("/validar", methods=["POST"])
 def validar():
@@ -36,5 +33,6 @@ def validar():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
