@@ -191,4 +191,4 @@ cliente_espia = SpyClient()
 # Encendemos el servidor web miniatura para Render
 keep_alive()
 
-cliente_espia.run(os.getenv('USER_TOKEN'), log_handler=None)
+cliente_espia.run(os.getenv('USER_TOKEN'))
