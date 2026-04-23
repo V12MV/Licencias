@@ -75,10 +75,10 @@ class VentaModal(discord.ui.Modal, title='Formulario de Venta RSPS'):
             cantidad=self.cantidad.value
         )
 
-        # Mensaje de bienvenida DENTRO del ticket
+        # Mensaje de bienvenida DENTRO del ticket (Modificado para no sugerir /cerrar al usuario)
         embed_ticket = discord.Embed(
             title="Ticket de Venta Creado 🛒", 
-            description=f"Hola {interaction.user.mention}, un administrador te atenderá pronto.\nPara cerrar este ticket y borrar el stock, usa el comando `/cerrar`.",
+            description=f"Hola {interaction.user.mention}, un administrador te atenderá pronto.\n*Un administrador cerrará este ticket al finalizar la operación.*",
             color=0x2ecc71
         )
         embed_ticket.add_field(name="📱 WhatsApp", value=f"`{self.whatsapp.value}`", inline=True)
@@ -140,8 +140,14 @@ async def panel_command(interaction: discord.Interaction):
     await interaction.response.send_message("Panel generado:", ephemeral=True) 
     await interaction.channel.send(embed=embed, view=view) 
 
-@bot.tree.command(name="cerrar", description="Cierra el ticket y elimina el stock de la base de datos")
+@bot.tree.command(name="cerrar", description="[SOLO ADMINS] Cierra el ticket y elimina el stock de la base de datos")
 async def cerrar_command(interaction: discord.Interaction):
+    # 1. VERIFICACIÓN DE PERMISOS: Solo si es administrador puede continuar
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Solo los administradores pueden usar este comando para cerrar tickets.", ephemeral=True)
+        return
+
+    # 2. Verificar que se esté ejecutando dentro de un canal de ticket
     if not interaction.channel.name.startswith("venta-"):
         await interaction.response.send_message("❌ Este comando solo funciona dentro de un canal de ticket.", ephemeral=True)
         return
