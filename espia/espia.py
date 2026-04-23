@@ -4,7 +4,19 @@ import re
 import aiohttp
 import asyncio
 from dotenv import load_dotenv
-from keep_alive import keep_alive # <--- INYECTADO AQUÍ
+from keep_alive import keep_alive
+
+# ==========================================
+# 🔥 EL "MONKEY PATCH" (ARREGLO PARA RENDER)
+# Esto evita el error de 'NoneType' object has no attribute 'get'
+# ==========================================
+from discord import enums
+def _patch_from_dict(cls, data):
+    if data is None:
+        return cls.all() # Retorna valor por defecto si data es None
+    return cls(data.get('all', False))
+enums.FriendFlags._from_dict = classmethod(_patch_from_dict)
+# ==========================================
 
 load_dotenv()
 
@@ -94,12 +106,9 @@ class SpyClient(discord.Client):
         webhook_url = os.getenv('WEBHOOK_URL')
         if not webhook_url: return
 
-        # Diseño Premium: Colores y Títulos
         if stock_disponible:
-            color = 0xf1c40f # Dorado
+            color = 0xf1c40f
             titulo = f"🎉 ¡MATCH ENCONTRADO! Demanda de {servidor_rsps}"
-            
-            # Formateo como bloque de código para los vendedores
             texto_stock = "```yaml\n"
             for v in stock_disponible:
                 texto_stock += f"Vendedor : {v.get('DiscordName')}\n"
@@ -107,24 +116,21 @@ class SpyClient(discord.Client):
                 texto_stock += f"WhatsApp : {v.get('Whatsapp')}\n"
                 texto_stock += "-" * 20 + "\n"
             texto_stock += "```"
-            
             estado_match = "✅ Oportunidad de venta detectada"
-
         else:
-            color = 0x2ecc71 # Verde Esmeralda
+            color = 0x2ecc71
             titulo = f"🛒 Nuevo Comprador Detectado: {servidor_rsps}"
             texto_stock = "```diff\n- No hay stock activo en la base de datos.\n```"
             estado_match = "❌ Sin vendedores disponibles"
 
-        # Embed Principal Profesional
         payload = {
             "embeds": [{
                 "author": {
                     "name": f"Alerta de Mercado • {message.guild.name}",
-                    "icon_url": "https://i.imgur.com/eOMD93t.png" # Tu logo aquí
+                    "icon_url": "https://i.imgur.com/eOMD93t.png"
                 },
                 "title": titulo,
-                "description": f"El usuario **{message.author.name}** está Comprando comprar en el canal `#{message.channel.name}`.\n\n"
+                "description": f"El usuario **{message.author.name}** está comprando en el canal `#{message.channel.name}`.\n\n"
                                f"**Detalles de la Operación:**\n"
                                f"```yaml\n"
                                f"Acción  : {accion}\n"
@@ -139,12 +145,8 @@ class SpyClient(discord.Client):
                     {"name": "📞 Contacto", "value": f"{message.author.mention}", "inline": True},
                     {"name": "🌐 Enlace Directo", "value": f"[➡️ Ir al mensaje original]({message.jump_url})", "inline": False}
                 ],
-                "footer": {
-                    "text": "⏳ Este mensaje se auto-eliminará en 1 hora por limpieza."
-                },
-                "thumbnail": {
-                    "url": "https://i.imgur.com/eOMD93t.png" # Tu logo también como miniatura
-                },
+                "footer": {"text": "⏳ Se auto-eliminará en 1 hora."},
+                "thumbnail": {"url": "https://i.imgur.com/eOMD93t.png"},
                 "timestamp": message.created_at.isoformat()
             }]
         }
@@ -161,7 +163,6 @@ class SpyClient(discord.Client):
         ticket_link = os.getenv('TICKET_CHANNEL_LINK')
         if not webhook_publico or not ticket_link: return
 
-        # Anuncio público estilizado
         mensaje_publico = (
             f"@everyone\n\n"
             f"📢 **COMPRANDO {servidor_rsps} YA** 📢\n"
@@ -174,21 +175,18 @@ class SpyClient(discord.Client):
         payload = {
             "content": mensaje_publico,
             "username": "BlessedGold Pedidos", 
-            "avatar_url": "https://i.imgur.com/eOMD93t.png" # Tu logo en el publicador
+            "avatar_url": "https://i.imgur.com/eOMD93t.png"
         }
 
         async with aiohttp.ClientSession() as session:
             await session.post(webhook_publico, json=payload)
-            print("   -> 📢 Anuncio público publicado en tu servidor.")
 
     async def borrar_mensaje_webhook(self, webhook_url, id_mensaje, segundos):
         await asyncio.sleep(segundos)
         async with aiohttp.ClientSession() as session:
             await session.delete(f"{webhook_url}/messages/{id_mensaje}")
 
+# --- INICIO ---
 cliente_espia = SpyClient()
-
-# Encendemos el servidor web miniatura para Render
 keep_alive()
-
 cliente_espia.run(os.getenv('USER_TOKEN'))
