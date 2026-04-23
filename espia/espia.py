@@ -187,6 +187,10 @@ class SpyClient(discord.Client):
             await session.delete(f"{webhook_url}/messages/{id_mensaje}")
 
 # --- INICIO ---
-cliente_espia = SpyClient()
-keep_alive()
-cliente_espia.run(os.getenv('USER_TOKEN'))
+USER_TOKEN = os.getenv('USER_TOKEN')
+if not USER_TOKEN:
+    print("❌ ERROR CRÍTICO: Falta la variable USER_TOKEN en Render.")
+else:
+    cliente_espia = SpyClient()
+    keep_alive()
+    cliente_espia.run(USER_TOKEN)
