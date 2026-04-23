@@ -3,23 +3,39 @@ import discord
 import re
 import aiohttp
 import asyncio
+from discord import enums
 from dotenv import load_dotenv
 from keep_alive import keep_alive
 
-# ==========================================
-# 🔥 EL "MONKEY PATCH" (ARREGLO PARA RENDER)
-# Esto evita el error de 'NoneType' object has no attribute 'get'
-# ==========================================
-from discord import enums
+# =========================================================
+# 🔥 FIX CRÍTICO PARA RENDER (BYPASS DE ENUMS INMUTABLES)
+# =========================================================
 def _patch_from_dict(cls, data):
     if data is None:
-        return cls.all() # Retorna valor por defecto si data es None
-    return cls(data.get('all', False))
-enums.FriendFlags._from_dict = classmethod(_patch_from_dict)
-# ==========================================
+        return cls.none
+    return cls._from_value(data)
+
+# Forzamos la inyección del método saltando la restricción de la librería
+try:
+    object.__setattr__(enums.FriendFlags, '_from_dict', classmethod(_patch_from_dict))
+    print("✅ Parche de Enums (FriendFlags) aplicado con éxito.")
+except Exception as e:
+    print(f"⚠️ Error al aplicar parche: {e}")
+# =========================================================
 
 load_dotenv()
 
+# Iniciar servidor Flask para evitar que Render mate el proceso
+keep_alive()
+
+# Validación de Token
+USER_TOKEN = os.getenv('USER_TOKEN')
+if not USER_TOKEN:
+    print("❌ ERROR CRÍTICO: No se encontró USER_TOKEN en las variables de entorno.")
+
+# ==========================================
+# 🕵️ CLASE DEL ESPÍA
+# ==========================================
 class SpyClient(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -29,24 +45,19 @@ class SpyClient(discord.Client):
     async def on_ready(self):
         print(f'\n[ESPIA] 🟢 Conectado exitosamente como {self.user}!')
         if not self.canales_ids:
-            print("[ERROR] No hay canales configurados en TARGET_CHANNELS (.env)")
+            print("[⚠️] No hay canales configurados en TARGET_CHANNELS.")
             return
 
-        print(f'[ESPIA] Iniciando MODO PRODUCCIÓN (CON AUTO-MATCHER).')
-        
-        canales_exitosos = 0
+        print(f'[ESPIA] Modo Producción Activo.')
         for canal_id in self.canales_ids:
-            canal = self.get_channel(canal_id)
-            if canal is None:
-                try:
-                    canal = await self.fetch_channel(canal_id)
-                except Exception:
-                    pass
-            if canal:
-                print(f"   ✅ Monitoreando: {canal.guild.name} -> #{canal.name}")
-                canales_exitosos += 1
+            try:
+                canal = self.get_channel(canal_id) or await self.fetch_channel(canal_id)
+                if canal:
+                    print(f"    ✅ Monitoreando: {canal.guild.name} -> #{canal.name}")
+            except:
+                print(f"    ❌ No se pudo acceder al canal ID: {canal_id}")
 
-        print(f'\n[ESPIA] 🎧 Escuchando en {canales_exitosos} canales...')
+        print(f'\n[ESPIA] 🎧 Escuchando en {len(self.canales_ids)} canales...')
         print("-" * 50)
 
     async def on_message(self, message):
@@ -56,141 +67,99 @@ class SpyClient(discord.Client):
 
     async def procesar_mensaje(self, message):
         if message.embeds: return 
-
-        texto_limpio = message.content.lower().replace('*', '').replace('+', '').strip()
+        texto = message.content.lower().replace('*', '').replace('+', '').strip()
         
-        patron_normal = r'(buy|buying)\s+(\d+[kmb]?)\s+(\w+)'
-        patron_invertido = r'(buy|buying)\s+(\w+)\s+(\d+[kmb]?)'
-        
-        match_normal = re.search(patron_normal, texto_limpio, re.IGNORECASE)
-        match_invertido = re.search(patron_invertido, texto_limpio, re.IGNORECASE)
+        patrones = [r'(buy|buying)\s+(\d+[kmb]?)\s+(\w+)', r'(buy|buying)\s+(\w+)\s+(\d+[kmb]?)']
+        match = None
+        for p in patrones:
+            match = re.search(p, texto, re.IGNORECASE)
+            if match: break
 
-        if match_normal:
-            accion = "Buy"
-            cantidad = match_normal.group(2).upper()
-            servidor_rsps = match_normal.group(3).capitalize()
-        elif match_invertido:
-            accion = "Buy"
-            servidor_rsps = match_invertido.group(2).capitalize()
-            cantidad = match_invertido.group(3).upper()
-        else:
-            return 
+        if not match: return
+
+        # Extraer datos según el patrón que hizo match
+        try:
+            if match.group(2).replace('k','').replace('m','').replace('b','').isdigit():
+                cantidad, servidor = match.group(2).upper(), match.group(3).capitalize()
+            else:
+                servidor, cantidad = match.group(2).capitalize(), match.group(3).upper()
             
-        print(f"\n🔔 [NUEVA DEMANDA] {cantidad} de {servidor_rsps} | De: {message.guild.name}")
-        
-        stock_disponible = await self.consultar_baserow(servidor_rsps)
-        
-        await self.enviar_webhook_privado(accion, cantidad, servidor_rsps, message, stock_disponible)
-        await self.enviar_webhook_publico(cantidad, servidor_rsps)
+            print(f"🔔 [DEMANDA] {cantidad} {servidor} en {message.guild.name}")
+            stock = await self.consultar_baserow(servidor)
+            await self.enviar_webhook_privado(cantidad, servidor, message, stock)
+            await self.enviar_webhook_publico(cantidad, servidor)
+        except Exception as e:
+            print(f"❌ Error procesando match: {e}")
 
     async def consultar_baserow(self, servidor_buscado):
         url = f"https://api.baserow.io/api/database/rows/table/{os.getenv('BASEROW_TABLE_ID')}/?user_field_names=true"
         headers = {"Authorization": f"Token {os.getenv('BASEROW_TOKEN')}"}
-        
-        vendedores_match = []
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    filas = data.get('results', [])
-                    
-                    for fila in filas:
-                        status = fila.get('Status', {})
-                        status_val = status.get('value') if isinstance(status, dict) else status
-                        
-                        if status_val == 'Activo' and fila.get('RSPS', '').lower() == servidor_buscado.lower():
-                            vendedores_match.append(fila)
-        return vendedores_match
+        matches = []
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for fila in data.get('results', []):
+                            st = fila.get('Status', {})
+                            st_val = st.get('value') if isinstance(st, dict) else st
+                            if st_val == 'Activo' and str(fila.get('RSPS', '')).lower() == servidor_buscado.lower():
+                                matches.append(fila)
+        except Exception as e:
+            print(f"⚠️ Error en Baserow: {e}")
+        return matches
 
-    async def enviar_webhook_privado(self, accion, cantidad, servidor_rsps, message, stock_disponible):
+    async def enviar_webhook_privado(self, cantidad, servidor, message, stock):
         webhook_url = os.getenv('WEBHOOK_URL')
         if not webhook_url: return
-
-        if stock_disponible:
-            color = 0xf1c40f
-            titulo = f"🎉 ¡MATCH ENCONTRADO! Demanda de {servidor_rsps}"
-            texto_stock = "```yaml\n"
-            for v in stock_disponible:
-                texto_stock += f"Vendedor : {v.get('DiscordName')}\n"
-                texto_stock += f"Cantidad : {v.get('Quantity')}\n"
-                texto_stock += f"WhatsApp : {v.get('Whatsapp')}\n"
-                texto_stock += "-" * 20 + "\n"
-            texto_stock += "```"
-            estado_match = "✅ Oportunidad de venta detectada"
+        
+        color = 0xf1c40f if stock else 0x2ecc71
+        res_matcher = "```yaml\n"
+        if stock:
+            for v in stock: 
+                res_matcher += f"Vendedor: {v.get('DiscordName')}\nCant: {v.get('Quantity')}\nWS: {v.get('Whatsapp')}\n---\n"
         else:
-            color = 0x2ecc71
-            titulo = f"🛒 Nuevo Comprador Detectado: {servidor_rsps}"
-            texto_stock = "```diff\n- No hay stock activo en la base de datos.\n```"
-            estado_match = "❌ Sin vendedores disponibles"
+            res_matcher += "No hay stock activo en la base de datos.\n"
+        res_matcher += "```"
 
         payload = {
             "embeds": [{
-                "author": {
-                    "name": f"Alerta de Mercado • {message.guild.name}",
-                    "icon_url": "https://i.imgur.com/eOMD93t.png"
-                },
-                "title": titulo,
-                "description": f"El usuario **{message.author.name}** está comprando en el canal `#{message.channel.name}`.\n\n"
-                               f"**Detalles de la Operación:**\n"
-                               f"```yaml\n"
-                               f"Acción  : {accion}\n"
-                               f"Servidor: {servidor_rsps}\n"
-                               f"Cantidad: {cantidad}\n"
-                               f"```\n"
-                               f"**🔍 Resultado del Auto-Matcher:**\n"
-                               f"{estado_match}\n{texto_stock}",
+                "author": {"name": f"Alerta de Mercado • {message.guild.name}", "icon_url": "https://i.imgur.com/eOMD93t.png"},
+                "title": f"{'🎉 MATCH!' if stock else '🛒'} Compra de {servidor}",
+                "description": f"Buscando: **{cantidad} {servidor}**\n\n**🔍 Resultado del Auto-Matcher:**\n{res_matcher}",
                 "color": color,
                 "fields": [
-                    {"name": "👤 Discord ID", "value": f"`{message.author.id}`", "inline": True},
-                    {"name": "📞 Contacto", "value": f"{message.author.mention}", "inline": True},
-                    {"name": "🌐 Enlace Directo", "value": f"[➡️ Ir al mensaje original]({message.jump_url})", "inline": False}
+                    {"name": "Contacto", "value": message.author.mention, "inline": True},
+                    {"name": "Link", "value": f"[Ir al mensaje]({message.jump_url})", "inline": True}
                 ],
-                "footer": {"text": "⏳ Se auto-eliminará en 1 hora."},
-                "thumbnail": {"url": "https://i.imgur.com/eOMD93t.png"},
-                "timestamp": message.created_at.isoformat()
+                "thumbnail": {"url": "https://i.imgur.com/eOMD93t.png"}
             }]
         }
-
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{webhook_url}?wait=true", json=payload) as response:
-                if response.status in [200, 204]:
-                    datos = await response.json()
-                    id_msg = datos.get("id")
-                    if id_msg: asyncio.create_task(self.borrar_mensaje_webhook(webhook_url, id_msg, 3600))
+            await session.post(webhook_url, json=payload)
 
-    async def enviar_webhook_publico(self, cantidad, servidor_rsps):
-        webhook_publico = os.getenv('WEBHOOK_PUBLIC_URL')
-        ticket_link = os.getenv('TICKET_CHANNEL_LINK')
-        if not webhook_publico or not ticket_link: return
-
-        mensaje_publico = (
-            f"@everyone\n\n"
-            f"📢 **COMPRANDO {servidor_rsps} YA** 📢\n"
-            f"```yaml\n"
-            f"Comprando: {cantidad.upper()} {servidor_rsps.upper()}\n"
-            f"```\n"
-            f"👉 **Abre tu ticket ya en:** {ticket_link}"
-        )
-
+    async def enviar_webhook_publico(self, cantidad, servidor):
+        web_pub = os.getenv('WEBHOOK_PUBLIC_URL')
+        ticket_link = os.getenv('TICKET_CHANNEL_LINK', '#')
+        if not web_pub: return
+        
         payload = {
-            "content": mensaje_publico,
-            "username": "BlessedGold Pedidos", 
-            "avatar_url": "https://i.imgur.com/eOMD93t.png"
+            "content": "@everyone",
+            "embeds": [{
+                "title": f"📢 ¡ESTAMOS COMPRANDO {servidor.upper()}!",
+                "description": f"Se busca: **{cantidad}**\n\nSi tienes stock disponible, abre un ticket aquí:\n👉 [SOPORTE / TICKETS]({ticket_link})",
+                "color": 0x00ff00,
+                "footer": {"text": "Transacciones rápidas y seguras"}
+            }]
         }
-
         async with aiohttp.ClientSession() as session:
-            await session.post(webhook_publico, json=payload)
+            await session.post(web_pub, json=payload)
 
-    async def borrar_mensaje_webhook(self, webhook_url, id_mensaje, segundos):
-        await asyncio.sleep(segundos)
-        async with aiohttp.ClientSession() as session:
-            await session.delete(f"{webhook_url}/messages/{id_mensaje}")
-
-# --- INICIO ---
-USER_TOKEN = os.getenv('USER_TOKEN')
-if not USER_TOKEN:
-    print("❌ ERROR CRÍTICO: Falta la variable USER_TOKEN en Render.")
-else:
-    cliente_espia = SpyClient()
-    keep_alive()
-    cliente_espia.run(USER_TOKEN)
+# ==========================================
+# EJECUCIÓN
+# ==========================================
+client = SpyClient()
+try:
+    client.run(USER_TOKEN)
+except Exception as e:
+    print(f"❌ Error al iniciar el cliente: {e}")
