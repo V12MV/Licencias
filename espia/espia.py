@@ -30,7 +30,7 @@ Settings.__init__ = patched_settings_init
 # =========================================================
 
 load_dotenv()
-keep_alive() # Servidor para evitar que Render se apague
+keep_alive()
 
 class SpyClient(discord.Client):
     def __init__(self, *args, **kwargs):
@@ -44,7 +44,7 @@ class SpyClient(discord.Client):
             print("[ERROR] No hay canales configurados en TARGET_CHANNELS (.env)")
             return
 
-        print(f'[ESPIA] Iniciando MODO PRODUCCIÓN (CON AUTO-MATCHER).')
+        print(f'[ESPIA] Iniciando MODO PRODUCCIÓN (CON MOTOR INTELIGENTE).')
         
         canales_exitosos = 0
         for canal_id in self.canales_ids:
@@ -69,31 +69,70 @@ class SpyClient(discord.Client):
     async def procesar_mensaje(self, message):
         if message.embeds: return 
 
-        texto_limpio = message.content.lower().replace('*', '').replace('+', '').strip()
+        # 1. Separar por líneas (Mucha gente manda listas enteras en un solo mensaje)
+        lineas = message.content.split('\n')
+        matches_encontrados = [] # Para no repetir alertas del mismo server en un mensaje
         
-        patron_normal = r'(buy|buying)\s+(\d+[kmb]?)\s+(\w+)'
-        patron_invertido = r'(buy|buying)\s+(\w+)\s+(\d+[kmb]?)'
-        
-        match_normal = re.search(patron_normal, texto_limpio, re.IGNORECASE)
-        match_invertido = re.search(patron_invertido, texto_limpio, re.IGNORECASE)
-
-        if match_normal:
-            accion = "Buy"
-            cantidad = match_normal.group(2).upper()
-            servidor_rsps = match_normal.group(3).capitalize()
-        elif match_invertido:
-            accion = "Buy"
-            servidor_rsps = match_invertido.group(2).capitalize()
-            cantidad = match_invertido.group(3).upper()
-        else:
-            return 
+        for linea in lineas:
+            linea = linea.lower().strip()
             
-        print(f"\n🔔 [NUEVA DEMANDA] {cantidad} de {servidor_rsps} | De: {message.guild.name}")
-        
-        stock_disponible = await self.consultar_baserow(servidor_rsps)
-        
-        await self.enviar_webhook_privado(accion, cantidad, servidor_rsps, message, stock_disponible)
-        await self.enviar_webhook_publico(cantidad, servidor_rsps)
+            # Filtro rápido: si la línea no tiene "buy" o "buying", la saltamos
+            if not re.search(r'\b(buy|buying)\b', linea):
+                continue
+                
+            # 2. Limpieza extrema: Quitar pings (@), emojis raros y dejar lo esencial
+            texto_limpio = re.sub(r'<@&?\d+>', '', linea) # Quita @Roles y @Usuarios
+            texto_limpio = texto_limpio.replace('@everyone', '').replace('@here', '')
+            # Dejar solo letras, números, espacios y caracteres útiles (., -, +, /)
+            texto_limpio = re.sub(r'[^\w\s\.\-\+/]', '', texto_limpio).strip()
+            
+            # 3. Partir el texto justo después de "buy" o "buying"
+            partes = re.split(r'\b(?:buy|buying)\b', texto_limpio, maxsplit=1)
+            if len(partes) < 2: continue
+            
+            resto = partes[1].strip()
+            
+            # 4. Eliminar "palabras basura" que usan los traders y confunden la búsqueda
+            palabras_basura = ['asap', 'bulk', 'with account', 'for good price', 'for', 'good', 'price', 'all rsps', 'and selling', 'selling', 'and']
+            for pb in palabras_basura:
+                resto = re.sub(rf'\b{pb}\b', '', resto).strip()
+                
+            if not resto or resto == '': continue
+            
+            cantidad = "Cant. Variable / A Consultar"
+            servidor_rsps = resto
+            
+            # 5. Inteligencia de Extracción (Detectar rangos como 1-5M, 500B-800B, 25t+)
+            # Comprueba si el texto arranca con números, letras de medida, guiones o símbolos +
+            match_cantidad = re.match(r'^([0-9\.\-\+kmbqtKMBQT]+)\s+(.*)$', resto)
+            if match_cantidad:
+                cantidad = match_cantidad.group(1).upper()
+                servidor_rsps = match_cantidad.group(2).strip()
+            else:
+                # Buscar si lo escribieron al revés (Ej: "Lost City 10m")
+                match_inv = re.match(r'^(.*)\s+([0-9\.\-\+kmbqtKMBQT]+)$', resto)
+                if match_inv:
+                    servidor_rsps = match_inv.group(1).strip()
+                    cantidad = match_inv.group(2).upper()
+
+            # 6. Múltiples Servidores: Separar si usan "/" (Ej: Roatz / Lost City)
+            servidores = [s.strip().title() for s in servidor_rsps.split('/') if s.strip()]
+            
+            for serv in servidores:
+                # Evitar alertas basura si detecta palabras muy cortas o si dicen "All"
+                if len(serv) < 2 or serv.lower() in ['all', 'all rsps']: 
+                    continue 
+                    
+                if serv in matches_encontrados: 
+                    continue # Evita doble notificación si repiten el nombre
+                    
+                matches_encontrados.append(serv)
+                
+                print(f"\n🔔 [NUEVA DEMANDA] {cantidad} de {serv} | De: {message.guild.name}")
+                stock_disponible = await self.consultar_baserow(serv)
+                
+                await self.enviar_webhook_privado("Buy", cantidad, serv, message, stock_disponible)
+                await self.enviar_webhook_publico(cantidad, serv)
 
     async def consultar_baserow(self, servidor_buscado):
         url = f"https://api.baserow.io/api/database/rows/table/{os.getenv('BASEROW_TABLE_ID')}/?user_field_names=true"
@@ -143,7 +182,7 @@ class SpyClient(discord.Client):
                     "icon_url": "https://i.imgur.com/eOMD93t.png"
                 },
                 "title": titulo,
-                "description": f"El usuario **{message.author.name}** está Comprando comprar en el canal `#{message.channel.name}`.\n\n"
+                "description": f"El usuario **{message.author.name}** está Comprando en el canal `#{message.channel.name}`.\n\n"
                                f"**Detalles de la Operación:**\n"
                                f"```yaml\n"
                                f"Acción   : {accion}\n"
@@ -197,7 +236,6 @@ class SpyClient(discord.Client):
 
         async with aiohttp.ClientSession() as session:
             await session.post(webhook_publico, json=payload)
-            print("   -> 📢 Anuncio público publicado en tu servidor.")
 
     async def borrar_mensaje_webhook(self, webhook_url, id_mensaje, segundos):
         await asyncio.sleep(segundos)
